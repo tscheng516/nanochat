@@ -73,6 +73,10 @@ conflicts = [
     ],
 ]
 
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nanochat*"]
+
 [build-system]
 requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
