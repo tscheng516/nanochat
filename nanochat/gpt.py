@@ -27,7 +27,7 @@ from nanochat.flash_attention import flash_attn
 
 @dataclass
 class GPTConfig:
-    sequence_len: int = 2048
+    sequence_len: int = 2048 # set to 4096 for longer context to check for gated attention
     vocab_size: int = 32768
     n_layer: int = 12
     n_head: int = 6 # number of query heads
@@ -37,6 +37,9 @@ class GPTConfig:
     # Characters: L=long (full context), S=short (half context)
     # Examples: "L"=all full context, "SL"=alternating, "SSL"=two short then one long
     window_pattern: str = "SSSL"
+    # Position of layer normalization relative to sublayers. Options: "pre", "reordered",
+    # "peri"/"sandwich", "post", "hybrid0". Default "pre" (pre-norm).
+    norm_pos: str = "pre"
 
 
 def norm(x):
@@ -144,10 +147,28 @@ class Block(nn.Module):
         super().__init__()
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = MLP(config)
+        # store normalization positioning preference from config
+        self.norm_pos = getattr(config, "norm_pos", "pre")
 
     def forward(self, x, ve, cos_sin, window_size, kv_cache):
-        x = x + self.attn(norm(x), ve, cos_sin, window_size, kv_cache)
-        x = x + self.mlp(norm(x))
+        pos = self.norm_pos
+        if pos == "pre":
+            x = x + self.attn(norm(x), ve, cos_sin, window_size, kv_cache)
+            x = x + self.mlp(norm(x))
+        elif pos == "reordered":
+            x = x + norm(self.attn(x, ve, cos_sin, window_size, kv_cache))
+            x = x + norm(self.mlp(x))
+        elif pos in ("peri", "sandwich"):
+            x = x + norm(self.attn(norm(x), ve, cos_sin, window_size, kv_cache))
+            x = x + norm(self.mlp(norm(x)))
+        elif pos == "post":
+            x = norm(x + self.attn(x, ve, cos_sin, window_size, kv_cache))
+            x = norm(x + self.mlp(x))
+        elif pos == "hybrid0":
+            x = x + self.attn(norm(x), ve, cos_sin, window_size, kv_cache)
+            x = norm(x + self.mlp(x))
+        else:
+            raise ValueError(f"Unknown norm_pos: {pos}")
         return x
 
 
@@ -415,7 +436,7 @@ class GPT(nn.Module):
             x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
             ve = self.value_embeds[str(i)](idx).to(x.dtype) if str(i) in self.value_embeds else None
             x = block(x, ve, cos_sin, self.window_sizes[i], kv_cache)
-        x = norm(x)
+        x = norm(x) # this is the lm_head
 
         # Forward the lm_head (compute logits)
         softcap = 15 # smoothly cap the logits to the range [-softcap, softcap]
