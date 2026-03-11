@@ -54,6 +54,8 @@ parser.add_argument("--max-seq-len", type=int, default=2048, help="max context l
 parser.add_argument("--window-pattern", type=str, default="SSSL", help="sliding window pattern tiled across layers: L=full, S=half context (e.g. 'SSL')")
 # Layer normalization position variants: pre, reordered, peri/sandwich, post, hybrid0
 parser.add_argument("--norm-pos", type=str, default="pre", choices=["pre", "reordered", "peri", "sandwich", "post", "hybrid0"], help="positioning of layer norm relative to sublayers")
+# Token-mixer norms: string containing any of 'q', 'k', 'v' to enable RMS norm on queries/keys/values
+parser.add_argument("--tm-norm", type=str, default="qk", help="enable RMS norm on token-mixer tensors by including letters q/k/v in this string (e.g. 'qk' -> q and k normalized)")
 # Training horizon (only one used, in order of precedence)
 parser.add_argument("--num-iterations", type=int, default=-1, help="explicit number of optimization steps (-1 = disable)")
 parser.add_argument("--target-flops", type=float, default=-1.0, help="calculate num_iterations to reach target_flops (-1 = disable)")
@@ -140,6 +142,9 @@ def build_model_meta(depth):
         n_layer=depth, n_head=num_heads, n_kv_head=num_heads, n_embd=model_dim,
         window_pattern=args.window_pattern,
         norm_pos=args.norm_pos,
+        w_norm=("q" in args.tm_norm),
+        k_norm=("k" in args.tm_norm),
+        v_norm=("v" in args.tm_norm),
     )
     with torch.device("meta"):
         model_meta = GPT(config)

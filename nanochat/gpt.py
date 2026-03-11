@@ -40,6 +40,11 @@ class GPTConfig:
     # Position of layer normalization relative to sublayers. Options: "pre", "reordered",
     # "peri"/"sandwich", "post", "hybrid0". Default "pre" (pre-norm).
     norm_pos: str = "pre"
+    # Which tensors in attention receive RMS normalization (token-mixer control)
+    # w_norm -> queries, k_norm -> keys, v_norm -> values
+    w_norm: bool = True
+    k_norm: bool = True
+    v_norm: bool = False
 
 
 def norm(x):
@@ -81,6 +86,10 @@ class CausalSelfAttention(nn.Module):
         self.c_proj = Linear(self.n_embd, self.n_embd, bias=False)
         self.ve_gate_channels = 12
         self.ve_gate = Linear(self.ve_gate_channels, self.n_kv_head, bias=False) if has_ve(layer_idx, config.n_layer) else None
+        # token-mixer normalization flags (queries/keys/values)
+        self.w_norm = getattr(config, "w_norm", True)
+        self.k_norm = getattr(config, "k_norm", True)
+        self.v_norm = getattr(config, "v_norm", False)
 
     def forward(self, x, ve, cos_sin, window_size, kv_cache):
         B, T, C = x.size()
@@ -100,7 +109,13 @@ class CausalSelfAttention(nn.Module):
         # Apply Rotary Embeddings to queries and keys to get relative positional encoding
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
-        q, k = norm(q), norm(k) # QK norm
+        # Conditional normalization per config flags
+        if self.w_norm:
+            q = norm(q)
+        if self.k_norm:
+            k = norm(k)
+        if self.v_norm:
+            v = norm(v)
         q = q * 1.15  # sharper attention (split scale between Q and K), TODO think through better
         k = k * 1.15
 
