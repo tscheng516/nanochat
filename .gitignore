@@ -12,3 +12,5 @@ eval_bundle/
 CLAUDE.md
 wandb/
 train.sh
+logs/
+nanochat.egg-info/
