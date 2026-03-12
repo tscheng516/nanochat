@@ -179,7 +179,10 @@ class Block(nn.Module):
         elif pos == "post":
             x = norm(x + self.attn(x, ve, cos_sin, window_size, kv_cache))
             x = norm(x + self.mlp(x))
-        elif pos == "hybrid0":
+        elif pos == "pre_post":
+            x = x + self.attn(norm(x), ve, cos_sin, window_size, kv_cache)
+            x = norm(x + self.mlp(x))
+        elif pos == "_post":
             x = x + self.attn(norm(x), ve, cos_sin, window_size, kv_cache)
             x = norm(x + self.mlp(x))
         else:
