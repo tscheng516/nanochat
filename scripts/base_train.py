@@ -53,7 +53,7 @@ parser.add_argument("--head-dim", type=int, default=128, help="target head dimen
 parser.add_argument("--max-seq-len", type=int, default=2048, help="max context length")
 parser.add_argument("--window-pattern", type=str, default="SSSL", help="sliding window pattern tiled across layers: L=full, S=half context (e.g. 'SSL')")
 # Layer normalization position variants: pre, reordered, peri/sandwich, post, hybrid0
-parser.add_argument("--norm-pos", type=str, default="pre", choices=["pre", "reordered", "peri", "sandwich", "post", "hybrid0"], help="positioning of layer norm relative to sublayers")
+parser.add_argument("--norm-pos", type=str, default="pre", choices=["pre", "reordered", "peri", "sandwich", "post", "pre_post", "_post"], help="positioning of layer norm relative to sublayers")
 # Token-mixer norms: string containing any of 'q', 'k', 'v' to enable RMS norm on queries/keys/values
 parser.add_argument("--tm-norm", type=str, default="qk", help="enable RMS norm on token-mixer tensors by including letters q/k/v in this string (e.g. 'qk' -> q and k normalized)")
 # Training horizon (only one used, in order of precedence)
