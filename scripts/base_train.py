@@ -50,14 +50,11 @@ parser.add_argument("--fp8-recipe", type=str, default="tensorwise", choices=["ro
 parser.add_argument("--depth", type=int, default=20, help="depth of the Transformer model")
 parser.add_argument("--aspect-ratio", type=int, default=64, help="model_dim = depth * aspect_ratio")
 parser.add_argument("--head-dim", type=int, default=128, help="target head dimension for attention")
+parser.add_argument("--kv-head-ratio", type=int, default=1, help="ratio between n_heads and n_kv_heads; n_kv_heads = n_heads // kv_head_ratio (>=1)") 
+parser.add_argument("--norm-pos", type=str, default="pre", choices=["pre", "reordered", "peri", "sandwich", "post", "pre_post", "_post"], help="positioning of layer norm relative to sublayers") 
+parser.add_argument("--tm-norm", type=str, default="qk", help="enable RMS norm on token-mixer tensors by including letters q/k/v in this string (e.g. 'qk' -> q and k normalized)")
 parser.add_argument("--max-seq-len", type=int, default=2048, help="max context length")
 parser.add_argument("--window-pattern", type=str, default="SSSL", help="sliding window pattern tiled across layers: L=full, S=half context (e.g. 'SSL')")
-# Group-query attention: ratio between total heads and KV heads
-parser.add_argument("--kv-head-ratio", type=int, default=1, help="ratio between n_heads and n_kv_heads; n_kv_heads = n_heads // kv_head_ratio (>=1)")
-# Layer normalization position variants: pre, reordered, peri/sandwich, post, hybrid0
-parser.add_argument("--norm-pos", type=str, default="pre", choices=["pre", "reordered", "peri", "sandwich", "post", "pre_post", "_post"], help="positioning of layer norm relative to sublayers")
-# Token-mixer norms: string containing any of 'q', 'k', 'v' to enable RMS norm on queries/keys/values
-parser.add_argument("--tm-norm", type=str, default="qk", help="enable RMS norm on token-mixer tensors by including letters q/k/v in this string (e.g. 'qk' -> q and k normalized)")
 # Training horizon (only one used, in order of precedence)
 parser.add_argument("--num-iterations", type=int, default=-1, help="explicit number of optimization steps (-1 = disable)")
 parser.add_argument("--target-flops", type=float, default=-1.0, help="calculate num_iterations to reach target_flops (-1 = disable)")
