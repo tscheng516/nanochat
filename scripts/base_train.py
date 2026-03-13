@@ -52,6 +52,8 @@ parser.add_argument("--aspect-ratio", type=int, default=64, help="model_dim = de
 parser.add_argument("--head-dim", type=int, default=128, help="target head dimension for attention")
 parser.add_argument("--max-seq-len", type=int, default=2048, help="max context length")
 parser.add_argument("--window-pattern", type=str, default="SSSL", help="sliding window pattern tiled across layers: L=full, S=half context (e.g. 'SSL')")
+# Group-query attention: ratio between total heads and KV heads
+parser.add_argument("--kv-head-ratio", type=int, default=1, help="ratio between n_heads and n_kv_heads; n_kv_heads = n_heads // kv_head_ratio (>=1)")
 # Layer normalization position variants: pre, reordered, peri/sandwich, post, hybrid0
 parser.add_argument("--norm-pos", type=str, default="pre", choices=["pre", "reordered", "peri", "sandwich", "post", "pre_post", "_post"], help="positioning of layer norm relative to sublayers")
 # Token-mixer norms: string containing any of 'q', 'k', 'v' to enable RMS norm on queries/keys/values
@@ -83,6 +85,7 @@ parser.add_argument("--save-every", type=int, default=-1, help="save checkpoints
 parser.add_argument("--model-tag", type=str, default=None, help="override model tag for checkpoint directory name")
 args = parser.parse_args()
 user_config = vars(args).copy()  # for logging
+
 # -----------------------------------------------------------------------------
 # Compute init and wandb logging
 
@@ -137,9 +140,11 @@ def build_model_meta(depth):
     base_dim = depth * args.aspect_ratio
     model_dim = ((base_dim + args.head_dim - 1) // args.head_dim) * args.head_dim
     num_heads = model_dim // args.head_dim
+    # Determine number of kv heads for group-query attention. Ensure at least 1.
+    n_kv_head = max(1, num_heads // args.kv_head_ratio)
     config = GPTConfig(
         sequence_len=args.max_seq_len, vocab_size=vocab_size,
-        n_layer=depth, n_head=num_heads, n_kv_head=num_heads, n_embd=model_dim,
+        n_layer=depth, n_head=num_heads, n_kv_head=n_kv_head, n_embd=model_dim,
         window_pattern=args.window_pattern,
         norm_pos=args.norm_pos,
         w_norm=("q" in args.tm_norm),
