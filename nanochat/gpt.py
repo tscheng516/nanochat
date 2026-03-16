@@ -57,6 +57,10 @@ class RMSNorm(nn.Module):
     identical to the previous module-free norm() function.
     When affine=True a per-channel weight (scale) and bias are added,
     matching the learnable layer norm found in traditional Transformers.
+
+    Args:
+        dim: Feature dimension to normalise over (last dimension of the input tensor).
+        affine: If True, add learnable per-channel weight (init 1) and bias (init 0).
     """
     def __init__(self, dim: int, affine: bool = False):
         super().__init__()
@@ -186,13 +190,27 @@ class Block(nn.Module):
         super().__init__()
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = MLP(config)
-        # store normalization positioning preference from config
         self.norm_pos = getattr(config, "norm_pos", "pre")
-        # RMSNorm modules for block-level norms (norm1 = pre-attn / post-attn,
-        # norm2 = pre-mlp / post-mlp depending on norm_pos)
         affine = getattr(config, "affine_ln", False)
-        self.norm1 = RMSNorm(config.n_embd, affine=affine)
-        self.norm2 = RMSNorm(config.n_embd, affine=affine)
+        # Create RMSNorm instances based on norm_pos so that each application site
+        # gets its own independent set of learnable parameters when affine_ln=True.
+        #   pre / reordered / post / pre_post : one norm for attention, one for MLP
+        #   _post                             : only a norm for MLP (attention is unnormalized)
+        #   peri / sandwich                   : two independent norms per sublayer (pre + post)
+        if self.norm_pos in ("pre", "reordered", "post", "pre_post"):
+            self.norm1 = RMSNorm(config.n_embd, affine=affine)  # attention norm
+            self.norm2 = RMSNorm(config.n_embd, affine=affine)  # MLP norm
+        elif self.norm_pos == "_post":
+            # No norm applied to attention; only post-norm wraps the MLP residual.
+            self.norm2 = RMSNorm(config.n_embd, affine=affine)
+        elif self.norm_pos in ("peri", "sandwich"):
+            # Four independent norms: pre/post for attention and pre/post for MLP.
+            self.norm_attn_pre  = RMSNorm(config.n_embd, affine=affine)
+            self.norm_attn_post = RMSNorm(config.n_embd, affine=affine)
+            self.norm_mlp_pre   = RMSNorm(config.n_embd, affine=affine)
+            self.norm_mlp_post  = RMSNorm(config.n_embd, affine=affine)
+        else:
+            raise ValueError(f"Unknown norm_pos: {self.norm_pos}")
 
     def forward(self, x, ve, cos_sin, window_size, kv_cache):
         pos = self.norm_pos
@@ -203,10 +221,9 @@ class Block(nn.Module):
             x = x + self.norm1(self.attn(x, ve, cos_sin, window_size, kv_cache))
             x = x + self.norm2(self.mlp(x))
         elif pos in ("peri", "sandwich"):
-            # norm1 and norm2 are each applied twice (before and after the sublayer),
-            # sharing affine parameters for the input and output norms respectively.
-            x = x + self.norm1(self.attn(self.norm1(x), ve, cos_sin, window_size, kv_cache))
-            x = x + self.norm2(self.mlp(self.norm2(x)))
+            # Each application site uses its own independent norm module.
+            x = x + self.norm_attn_post(self.attn(self.norm_attn_pre(x), ve, cos_sin, window_size, kv_cache))
+            x = x + self.norm_mlp_post(self.mlp(self.norm_mlp_pre(x)))
         elif pos == "post":
             x = self.norm1(x + self.attn(x, ve, cos_sin, window_size, kv_cache))
             x = self.norm2(x + self.mlp(x))
@@ -214,7 +231,8 @@ class Block(nn.Module):
             x = x + self.attn(self.norm1(x), ve, cos_sin, window_size, kv_cache)
             x = self.norm2(x + self.mlp(x))
         elif pos == "_post":
-            x = x + self.attn(self.norm1(x), ve, cos_sin, window_size, kv_cache)
+            # Attention receives no normalization; only the MLP output is post-normed.
+            x = x + self.attn(x, ve, cos_sin, window_size, kv_cache)
             x = self.norm2(x + self.mlp(x))
         else:
             raise ValueError(f"Unknown norm_pos: {pos}")
@@ -433,7 +451,8 @@ class GPT(nn.Module):
         # model-level norm params (norm_e, norm_f) + per-block / per-head norm params
         ln = sum(p.numel() for p in self._collect_ln_params())
         total = wte + value_embeds + lm_head + transformer_matrices + scalars + ln
-        assert total == sum(p.numel() for p in self.parameters()), "Parameter count mismatch"
+        actual = sum(p.numel() for p in self.parameters())
+        assert total == actual, f"Parameter count mismatch: grouped={total}, actual={actual}"
         return {
             'wte': wte,
             'value_embeds': value_embeds,
@@ -447,21 +466,17 @@ class GPT(nn.Module):
     def _collect_ln_params(self):
         """Return a list of all affine RMSNorm parameters in the model.
 
-        When affine_ln=False every RMSNorm has no parameters, so the list is empty
-        and behavior is identical to the original model.
+        Iterates every RMSNorm sub-module and collects its parameters.
+        When affine_ln=False all RMSNorm instances have no parameters, so the
+        list is empty and behavior is identical to the original model.
+        The set of RMSNorm instances varies with norm_pos (e.g. peri/sandwich
+        creates 4 per block; _post creates 1), so using self.modules() is
+        the canonical way to discover them all without hard-coded attribute names.
         """
         params = []
-        # Model-level norms (embedding + final)
-        params.extend(self.norm_e.parameters())
-        params.extend(self.norm_f.parameters())
-        # Per-block norms
-        for block in self.transformer.h:
-            params.extend(block.norm1.parameters())
-            params.extend(block.norm2.parameters())
-            # QK / V norms inside attention
-            for norm_mod in (block.attn.norm_q, block.attn.norm_k, block.attn.norm_v):
-                if norm_mod is not None:
-                    params.extend(norm_mod.parameters())
+        for module in self.modules():
+            if isinstance(module, RMSNorm) and module.weight is not None:
+                params.extend(module.parameters())
         return params
 
     def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5, ln_lr=3e-4):
