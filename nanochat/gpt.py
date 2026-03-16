@@ -66,6 +66,7 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(dim)) if affine else None
         # self.bias = nn.Parameter(torch.zeros(dim)) if affine else None
+        self.bias = None 
 
     def forward(self, x):
         x = F.rms_norm(x, (x.size(-1),), weight=self.weight)
