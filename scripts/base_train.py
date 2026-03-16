@@ -53,6 +53,7 @@ parser.add_argument("--head-dim", type=int, default=128, help="target head dimen
 parser.add_argument("--kv-head-ratio", type=int, default=1, help="ratio between n_heads and n_kv_heads; n_kv_heads = n_heads // kv_head_ratio (>=1)") 
 parser.add_argument("--norm-pos", type=str, default="pre", choices=["pre", "reordered", "peri", "sandwich", "post", "pre_post", "_post"], help="positioning of layer norm relative to sublayers") 
 parser.add_argument("--tm-norm", type=str, default="qk", help="enable RMS norm on token-mixer tensors by including letters q/k/v in this string (e.g. 'qk' -> q and k normalized)")
+parser.add_argument("--affine-ln", action="store_true", help="use learnable affine weight and bias in RMSNorm layers (traditional Transformer-style layer norm)")
 parser.add_argument("--max-seq-len", type=int, default=2048, help="max context length")
 parser.add_argument("--window-pattern", type=str, default="SSSL", help="sliding window pattern tiled across layers: L=full, S=half context (e.g. 'SSL')")
 # Training horizon (only one used, in order of precedence)
@@ -67,6 +68,7 @@ parser.add_argument("--unembedding-lr", type=float, default=0.008, help="learnin
 parser.add_argument("--weight-decay", type=float, default=0.28, help="cautious weight decay for the Muon optimizer (for weights)")
 parser.add_argument("--matrix-lr", type=float, default=0.02, help="learning rate for matrix parameters (Muon)")
 parser.add_argument("--scalar-lr", type=float, default=0.5, help="learning rate for scalars (resid_lambdas, x0_lambdas)")
+parser.add_argument("--ln-lr", type=float, default=3e-4, help="learning rate for affine RMSNorm parameters (AdamW, only used when --affine-ln is set)")
 parser.add_argument("--warmup-steps", type=int, default=40, help="number of steps for LR warmup")
 parser.add_argument("--warmdown-ratio", type=float, default=0.65, help="ratio of iterations for LR warmdown")
 parser.add_argument("--final-lr-frac", type=float, default=0.05, help="final LR as fraction of initial LR")
@@ -147,6 +149,7 @@ def build_model_meta(depth):
         w_norm=("q" in args.tm_norm),
         k_norm=("k" in args.tm_norm),
         v_norm=("v" in args.tm_norm),
+        affine_ln=args.affine_ln,
     )
     with torch.device("meta"):
         model_meta = GPT(config)
@@ -319,6 +322,7 @@ optimizer = model.setup_optimizer(
     unembedding_lr=args.unembedding_lr * batch_lr_scale,
     embedding_lr=args.embedding_lr * batch_lr_scale,
     scalar_lr=args.scalar_lr * batch_lr_scale,
+    ln_lr=args.ln_lr * batch_lr_scale,
     # Muon hyperparameters
     matrix_lr=args.matrix_lr * batch_lr_scale,
     weight_decay=weight_decay_scaled,

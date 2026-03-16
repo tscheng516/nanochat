@@ -6,13 +6,12 @@ Notable features:
 - untied weights for token embedding and lm_head
 - relu^2 activation in MLP
 - norm after token embedding
-- no learnable params in rmsnorm
+- no learnable params in rmsnorm (unless affine_ln=True)
 - no bias in linear layers
 - Group-Query Attention (GQA) support for more efficient inference
 - Flash Attention 3 integration
 """
 
-from functools import partial
 from dataclasses import dataclass
 
 import torch
@@ -45,10 +44,30 @@ class GPTConfig:
     w_norm: bool = True
     k_norm: bool = True
     v_norm: bool = False
+    # Whether to use learnable affine parameters (weight and bias) in RMSNorm layers.
+    # False (default) = unlearnable, matches the original behavior.
+    # True = traditional Transformer-style affine layer norm.
+    affine_ln: bool = False
 
 
-def norm(x):
-    return F.rms_norm(x, (x.size(-1),)) # note that this will run in bf16, seems ok
+class RMSNorm(nn.Module):
+    """RMS normalisation with optional learnable affine parameters.
+
+    When affine=False this is a parameter-free wrapper around F.rms_norm,
+    identical to the previous module-free norm() function.
+    When affine=True a per-channel weight (scale) and bias are added,
+    matching the learnable layer norm found in traditional Transformers.
+    """
+    def __init__(self, dim: int, affine: bool = False):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim)) if affine else None
+        self.bias = nn.Parameter(torch.zeros(dim)) if affine else None
+
+    def forward(self, x):
+        x = F.rms_norm(x, (x.size(-1),), weight=self.weight)
+        if self.bias is not None:
+            x = x + self.bias
+        return x
 
 class Linear(nn.Linear):
     """nn.Linear that casts weights to match input dtype in forward.
@@ -90,6 +109,11 @@ class CausalSelfAttention(nn.Module):
         self.w_norm = getattr(config, "w_norm", True)
         self.k_norm = getattr(config, "k_norm", True)
         self.v_norm = getattr(config, "v_norm", False)
+        # RMSNorm modules for QK norms (created only when the flag is enabled)
+        affine = getattr(config, "affine_ln", False)
+        self.norm_q = RMSNorm(self.head_dim, affine=affine) if self.w_norm else None
+        self.norm_k = RMSNorm(self.head_dim, affine=affine) if self.k_norm else None
+        self.norm_v = RMSNorm(self.head_dim, affine=affine) if self.v_norm else None
 
     def forward(self, x, ve, cos_sin, window_size, kv_cache):
         B, T, C = x.size()
@@ -110,12 +134,12 @@ class CausalSelfAttention(nn.Module):
         cos, sin = cos_sin
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
         # Conditional normalization per config flags
-        if self.w_norm:
-            q = norm(q)
-        if self.k_norm:
-            k = norm(k)
-        if self.v_norm:
-            v = norm(v)
+        if self.norm_q is not None:
+            q = self.norm_q(q)
+        if self.norm_k is not None:
+            k = self.norm_k(k)
+        if self.norm_v is not None:
+            v = self.norm_v(v)
         q = q * 1.15  # sharper attention (split scale between Q and K), TODO think through better
         k = k * 1.15
 
@@ -164,27 +188,34 @@ class Block(nn.Module):
         self.mlp = MLP(config)
         # store normalization positioning preference from config
         self.norm_pos = getattr(config, "norm_pos", "pre")
+        # RMSNorm modules for block-level norms (norm1 = pre-attn / post-attn,
+        # norm2 = pre-mlp / post-mlp depending on norm_pos)
+        affine = getattr(config, "affine_ln", False)
+        self.norm1 = RMSNorm(config.n_embd, affine=affine)
+        self.norm2 = RMSNorm(config.n_embd, affine=affine)
 
     def forward(self, x, ve, cos_sin, window_size, kv_cache):
         pos = self.norm_pos
         if pos == "pre":
-            x = x + self.attn(norm(x), ve, cos_sin, window_size, kv_cache)
-            x = x + self.mlp(norm(x))
+            x = x + self.attn(self.norm1(x), ve, cos_sin, window_size, kv_cache)
+            x = x + self.mlp(self.norm2(x))
         elif pos == "reordered":
-            x = x + norm(self.attn(x, ve, cos_sin, window_size, kv_cache))
-            x = x + norm(self.mlp(x))
+            x = x + self.norm1(self.attn(x, ve, cos_sin, window_size, kv_cache))
+            x = x + self.norm2(self.mlp(x))
         elif pos in ("peri", "sandwich"):
-            x = x + norm(self.attn(norm(x), ve, cos_sin, window_size, kv_cache))
-            x = x + norm(self.mlp(norm(x)))
+            # norm1 and norm2 are each applied twice (before and after the sublayer),
+            # sharing affine parameters for the input and output norms respectively.
+            x = x + self.norm1(self.attn(self.norm1(x), ve, cos_sin, window_size, kv_cache))
+            x = x + self.norm2(self.mlp(self.norm2(x)))
         elif pos == "post":
-            x = norm(x + self.attn(x, ve, cos_sin, window_size, kv_cache))
-            x = norm(x + self.mlp(x))
+            x = self.norm1(x + self.attn(x, ve, cos_sin, window_size, kv_cache))
+            x = self.norm2(x + self.mlp(x))
         elif pos == "pre_post":
-            x = x + self.attn(norm(x), ve, cos_sin, window_size, kv_cache)
-            x = norm(x + self.mlp(x))
+            x = x + self.attn(self.norm1(x), ve, cos_sin, window_size, kv_cache)
+            x = self.norm2(x + self.mlp(x))
         elif pos == "_post":
-            x = x + self.attn(norm(x), ve, cos_sin, window_size, kv_cache)
-            x = norm(x + self.mlp(x))
+            x = x + self.attn(self.norm1(x), ve, cos_sin, window_size, kv_cache)
+            x = self.norm2(x + self.mlp(x))
         else:
             raise ValueError(f"Unknown norm_pos: {pos}")
         return x
@@ -222,6 +253,10 @@ class GPT(nn.Module):
         head_dim = config.n_embd // config.n_head
         kv_dim = config.n_kv_head * head_dim
         self.value_embeds = nn.ModuleDict({str(i): nn.Embedding(padded_vocab_size, kv_dim) for i in range(config.n_layer) if has_ve(i, config.n_layer)})
+        # Model-level RMSNorm instances: norm after embedding (norm_e) and before lm_head (norm_f)
+        affine = getattr(config, "affine_ln", False)
+        self.norm_e = RMSNorm(config.n_embd, affine=affine)
+        self.norm_f = RMSNorm(config.n_embd, affine=affine)
         # To support meta device initialization, we init the rotary embeddings here, but it's just "fake" meta tensors only.
         # As for rotary_seq_len, these rotary embeddings are pretty small/cheap in memory,
         # so let's just over-compute them by 10X, but assert fail if we ever reach that amount.
@@ -275,6 +310,15 @@ class GPT(nn.Module):
         for block in self.transformer.h:
             if block.attn.ve_gate is not None:
                 torch.nn.init.uniform_(block.attn.ve_gate.weight, 0.0, 0.02)
+
+        # Affine RMSNorm parameters: weight=1, bias=0 (standard layer norm init)
+        if self.config.affine_ln:
+            for module in self.modules():
+                if isinstance(module, RMSNorm):
+                    if module.weight is not None:
+                        module.weight.fill_(1.0)
+                    if module.bias is not None:
+                        module.bias.fill_(0.0)
 
         # Rotary embeddings
         head_dim = self.config.n_embd // self.config.n_head
@@ -377,13 +421,18 @@ class GPT(nn.Module):
         Returns a dict with counts for each parameter group, so downstream analysis
         can experiment with which combination gives the cleanest scaling laws.
         """
-        # Count each group separately (mirrors the grouping in setup_optimizers)
+        # Collect affine LN params (non-empty only when affine_ln=True)
+        ln_param_ids = {id(p) for p in self._collect_ln_params()}
+        # Count each group separately (mirrors the grouping in setup_optimizer)
         wte = sum(p.numel() for p in self.transformer.wte.parameters())
         value_embeds = sum(p.numel() for p in self.value_embeds.parameters())
         lm_head = sum(p.numel() for p in self.lm_head.parameters())
-        transformer_matrices = sum(p.numel() for p in self.transformer.h.parameters())
+        # transformer_matrices excludes affine LN params (if any)
+        transformer_matrices = sum(p.numel() for p in self.transformer.h.parameters() if id(p) not in ln_param_ids)
         scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel()
-        total = wte + value_embeds + lm_head + transformer_matrices + scalars
+        # model-level norm params (norm_e, norm_f) + per-block / per-head norm params
+        ln = sum(p.numel() for p in self._collect_ln_params())
+        total = wte + value_embeds + lm_head + transformer_matrices + scalars + ln
         assert total == sum(p.numel() for p in self.parameters()), "Parameter count mismatch"
         return {
             'wte': wte,
@@ -391,21 +440,50 @@ class GPT(nn.Module):
             'lm_head': lm_head,
             'transformer_matrices': transformer_matrices,
             'scalars': scalars,
+            'ln': ln,
             'total': total,
         }
 
-    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5):
+    def _collect_ln_params(self):
+        """Return a list of all affine RMSNorm parameters in the model.
+
+        When affine_ln=False every RMSNorm has no parameters, so the list is empty
+        and behavior is identical to the original model.
+        """
+        params = []
+        # Model-level norms (embedding + final)
+        params.extend(self.norm_e.parameters())
+        params.extend(self.norm_f.parameters())
+        # Per-block norms
+        for block in self.transformer.h:
+            params.extend(block.norm1.parameters())
+            params.extend(block.norm2.parameters())
+            # QK / V norms inside attention
+            for norm_mod in (block.attn.norm_q, block.attn.norm_k, block.attn.norm_v):
+                if norm_mod is not None:
+                    params.extend(norm_mod.parameters())
+        return params
+
+    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5, ln_lr=3e-4):
         model_dim = self.config.n_embd
         ddp, rank, local_rank, world_size = get_dist_info()
 
+        # Collect affine LN params (empty when affine_ln=False)
+        ln_params = self._collect_ln_params()
+        ln_param_ids = {id(p) for p in ln_params}
+
         # Separate out all parameters into groups
-        matrix_params = list(self.transformer.h.parameters())
+        # transformer_matrices excludes any affine LN params so they are not double-counted
+        matrix_params = [p for p in self.transformer.h.parameters() if id(p) not in ln_param_ids]
         value_embeds_params = list(self.value_embeds.parameters())
         embedding_params = list(self.transformer.wte.parameters())
         lm_head_params = list(self.lm_head.parameters())
         resid_params = [self.resid_lambdas]
         x0_params = [self.x0_lambdas]
-        assert len(list(self.parameters())) == len(matrix_params) + len(embedding_params) + len(lm_head_params) + len(value_embeds_params) + len(resid_params) + len(x0_params)
+        assert len(list(self.parameters())) == (
+            len(matrix_params) + len(embedding_params) + len(lm_head_params) +
+            len(value_embeds_params) + len(resid_params) + len(x0_params) + len(ln_params)
+        )
 
         # Scale the LR for the AdamW parameters by ∝1/√dmodel (tuned for 768 dim model)
         dmodel_lr_scale = (model_dim / 768) ** -0.5
@@ -420,6 +498,11 @@ class GPT(nn.Module):
             dict(kind='adamw', params=resid_params, lr=scalar_lr * 0.01, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.05),
             dict(kind='adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),  # higher beta1 for x0
         ]
+        # Affine LN parameters use AdamW with a dedicated learning rate (empty when affine_ln=False)
+        if ln_params:
+            param_groups.append(
+                dict(kind='adamw', params=ln_params, lr=ln_lr, betas=(0.9, 0.95), eps=1e-10, weight_decay=0.0),
+            )
         # Muon groups (matrix params, grouped by shape for stacking)
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
@@ -448,13 +531,13 @@ class GPT(nn.Module):
         # Forward the trunk of the Transformer
         x = self.transformer.wte(idx) # embed current token
         x = x.to(COMPUTE_DTYPE) # ensure activations are in compute dtype (no-op usually, but active for fp16 code path)
-        x = norm(x)
+        x = self.norm_e(x)
         x0 = x  # save initial normalized embedding for x0 residual
         for i, block in enumerate(self.transformer.h):
             x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
             ve = self.value_embeds[str(i)](idx).to(x.dtype) if str(i) in self.value_embeds else None
             x = block(x, ve, cos_sin, self.window_sizes[i], kv_cache)
-        x = norm(x) # this is the lm_head
+        x = self.norm_f(x) # final norm before lm_head
 
         # Forward the lm_head (compute logits)
         softcap = 15 # smoothly cap the logits to the range [-softcap, softcap]
