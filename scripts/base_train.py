@@ -54,6 +54,7 @@ parser.add_argument("--kv-head-ratio", type=int, default=1, help="ratio between 
 parser.add_argument("--norm-pos", type=str, default="pre", choices=["pre", "reordered", "peri", "sandwich", "post", "pre_post", "_post"], help="positioning of layer norm relative to sublayers") 
 parser.add_argument("--tm-norm", type=str, default="qk", help="enable RMS norm on token-mixer tensors by including letters q/k/v in this string (e.g. 'qk' -> q and k normalized)")
 parser.add_argument("--affine-ln", action="store_true", help="use learnable affine weight and bias in RMSNorm layers (traditional Transformer-style layer norm)")
+parser.add_argument("--lns", action="store_true", help="enable Layer Norm Scaling (scale norm outputs by 1/sqrt(layer_index))")
 parser.add_argument("--max-seq-len", type=int, default=2048, help="max context length")
 parser.add_argument("--window-pattern", type=str, default="SSSL", help="sliding window pattern tiled across layers: L=full, S=half context (e.g. 'SSL')")
 # Training horizon (only one used, in order of precedence)
@@ -68,7 +69,7 @@ parser.add_argument("--unembedding-lr", type=float, default=0.008, help="learnin
 parser.add_argument("--weight-decay", type=float, default=0.28, help="cautious weight decay for the Muon optimizer (for weights)")
 parser.add_argument("--matrix-lr", type=float, default=0.02, help="learning rate for matrix parameters (Muon)")
 parser.add_argument("--scalar-lr", type=float, default=0.5, help="learning rate for scalars (resid_lambdas, x0_lambdas)")
-parser.add_argument("--ln-lr", type=float, default=3e-4, help="learning rate for affine RMSNorm parameters (AdamW, only used when --affine-ln is set)")
+parser.add_argument("--ln-lr", type=float, default=1e-3, help="learning rate for affine RMSNorm parameters (AdamW, only used when --affine-ln is set)")
 parser.add_argument("--warmup-steps", type=int, default=40, help="number of steps for LR warmup")
 parser.add_argument("--warmdown-ratio", type=float, default=0.65, help="ratio of iterations for LR warmdown")
 parser.add_argument("--final-lr-frac", type=float, default=0.05, help="final LR as fraction of initial LR")
@@ -150,6 +151,7 @@ def build_model_meta(depth):
         k_norm=("k" in args.tm_norm),
         v_norm=("v" in args.tm_norm),
         affine_ln=args.affine_ln,
+        lns=args.lns,
     )
     with torch.device("meta"):
         model_meta = GPT(config)

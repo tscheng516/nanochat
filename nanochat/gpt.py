@@ -14,6 +14,7 @@ Notable features:
 
 from dataclasses import dataclass
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -48,6 +49,8 @@ class GPTConfig:
     # False (default) = unlearnable, matches the original behavior.
     # True = traditional Transformer-style affine layer norm.
     affine_ln: bool = False
+    # Layer norm scaling: when True, multiply each layer-norm output by 1/sqrt(layer_index)
+    lns: bool = False
 
 
 class RMSNorm(nn.Module):
@@ -193,6 +196,11 @@ class Block(nn.Module):
         self.mlp = MLP(config)
         self.norm_pos = getattr(config, "norm_pos", "pre")
         affine = getattr(config, "affine_ln", False)
+        # Layer index and LNS settings
+        self.layer_idx = layer_idx
+        self.lns = getattr(config, "lns", False)
+        # Use 1-based layer index for scaling to avoid division by zero
+        self.lns_factor = 1.0 / math.sqrt(layer_idx + 1) if self.lns else 1.0
         # Create RMSNorm instances based on norm_pos so that each application site
         # gets its own independent set of learnable parameters when affine_ln=True.
         #   pre / reordered / post / pre_post : one norm for attention, one for MLP
@@ -215,26 +223,74 @@ class Block(nn.Module):
 
     def forward(self, x, ve, cos_sin, window_size, kv_cache):
         pos = self.norm_pos
+        orig_x = x
         if pos == "pre":
-            x = x + self.attn(self.norm1(x), ve, cos_sin, window_size, kv_cache)
-            x = x + self.mlp(self.norm2(x))
+            n1 = self.norm1(x)
+            if self.lns:
+                n1 = n1 * self.lns_factor
+            x = x + self.attn(n1, ve, cos_sin, window_size, kv_cache)
+            n2 = self.norm2(x)
+            if self.lns:
+                n2 = n2 * self.lns_factor
+            x = x + self.mlp(n2)
         elif pos == "reordered":
-            x = x + self.norm1(self.attn(x, ve, cos_sin, window_size, kv_cache))
-            x = x + self.norm2(self.mlp(x))
+            # attention then post-norm
+            y = self.attn(x, ve, cos_sin, window_size, kv_cache)
+            y = self.norm1(y)
+            if self.lns:
+                y = y * self.lns_factor
+            x = x + y
+            # mlp uses updated x after attention residual
+            z = self.mlp(x)
+            z = self.norm2(z)
+            if self.lns:
+                z = z * self.lns_factor
+            x = x + z
         elif pos in ("peri", "sandwich"):
             # Each application site uses its own independent norm module.
-            x = x + self.norm_attn_post(self.attn(self.norm_attn_pre(x), ve, cos_sin, window_size, kv_cache))
-            x = x + self.norm_mlp_post(self.mlp(self.norm_mlp_pre(x)))
+            pre_attn = self.norm_attn_pre(x)
+            if self.lns:
+                pre_attn = pre_attn * self.lns_factor
+            y = self.attn(pre_attn, ve, cos_sin, window_size, kv_cache)
+            post_attn = self.norm_attn_post(y)
+            if self.lns:
+                post_attn = post_attn * self.lns_factor
+            x = x + post_attn
+
+            pre_mlp = self.norm_mlp_pre(x)
+            if self.lns:
+                pre_mlp = pre_mlp * self.lns_factor
+            z = self.mlp(pre_mlp)
+            post_mlp = self.norm_mlp_post(z)
+            if self.lns:
+                post_mlp = post_mlp * self.lns_factor
+            x = x + post_mlp
         elif pos == "post":
-            x = self.norm1(x + self.attn(x, ve, cos_sin, window_size, kv_cache))
-            x = self.norm2(x + self.mlp(x))
+            y = self.attn(x, ve, cos_sin, window_size, kv_cache)
+            out = self.norm1(x + y)
+            if self.lns:
+                out = out * self.lns_factor
+            x = out
+            out2 = self.norm2(x + self.mlp(x))
+            if self.lns:
+                out2 = out2 * self.lns_factor
+            x = out2
         elif pos == "pre_post":
-            x = x + self.attn(self.norm1(x), ve, cos_sin, window_size, kv_cache)
-            x = self.norm2(x + self.mlp(x))
+            n1 = self.norm1(x)
+            if self.lns:
+                n1 = n1 * self.lns_factor
+            x = x + self.attn(n1, ve, cos_sin, window_size, kv_cache)
+            out = self.norm2(x + self.mlp(x))
+            if self.lns:
+                out = out * self.lns_factor
+            x = out
         elif pos == "_post":
             # Attention receives no normalization; only the MLP output is post-normed.
             x = x + self.attn(x, ve, cos_sin, window_size, kv_cache)
-            x = self.norm2(x + self.mlp(x))
+            out = self.norm2(x + self.mlp(x))
+            if self.lns:
+                out = out * self.lns_factor
+            x = out
         else:
             raise ValueError(f"Unknown norm_pos: {pos}")
         return x
