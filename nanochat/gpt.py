@@ -54,22 +54,11 @@ class GPTConfig:
 
 
 class RMSNorm(nn.Module):
-    """RMS normalisation with optional learnable affine parameters.
-
-    When affine=False this is a parameter-free wrapper around F.rms_norm,
-    identical to the previous module-free norm() function.
-    When affine=True a per-channel weight (scale) and bias are added,
-    matching the learnable layer norm found in traditional Transformers.
-
-    Args:
-        dim: Feature dimension to normalise over (last dimension of the input tensor).
-        affine: If True, add learnable per-channel weight (init 1) and bias (init 0).
-    """
+    """RMS normalisation with optional learnable affine parameters."""
     def __init__(self, dim: int, affine: bool = False):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(dim, dtype=COMPUTE_DTYPE)) if affine else None
-        # self.bias = nn.Parameter(torch.zeros(dim), dtype=COMPUTE_DTYPE) if affine else None
-        self.bias = None 
+        self.bias = nn.Parameter(torch.zeros(dim), dtype=COMPUTE_DTYPE) if affine else None
 
     def forward(self, x):
         x = F.rms_norm(x, (x.size(-1),), weight=self.weight)
