@@ -609,7 +609,7 @@ class GPT(nn.Module):
         if kv_cache is None:
             # Training / naive generate: full sequence available, use fast slice
             assert T > 1, "Training forward pass should have T > 1"
-            gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, self.config.n_ch: 3*self.config.n_ch-1])) # smear_gate uses 12:35 channels, where ve 0:11
+            gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, self.config.n_ch: 3*self.config.n_ch])) # smear_gate uses 2*n_ch channels, where ve is 0:n_ch-1
             x = torch.cat([x[:, :1], x[:, 1:] + gate * x[:, :-1]], dim=1)
         else:
             # KV cache inference: read prev embedding from cache, store current for next step
@@ -617,11 +617,11 @@ class GPT(nn.Module):
             kv_cache.prev_embedding = x[:, -1:, :]
             if T > 1:
                 # Prefill: apply smear to positions 1+, same as training
-                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, self.config.n_ch: 3*self.config.n_ch-1]))
+                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, self.config.n_ch: 3*self.config.n_ch]))
                 x = torch.cat([x[:, :1], x[:, 1:] + gate * x[:, :-1]], dim=1)
             elif x_pre_smear is not None:
                 # Decode: single token, use cached prev embedding
-                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, self.config.n_ch: 3*self.config.n_ch-1]))
+                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, :, self.config.n_ch: 3*self.config.n_ch]))
                 x = x + gate * x_pre_smear
 
         # Forward the trunk of the Transformer
