@@ -1,15 +1,24 @@
 """
-GPT model (rewrite, a lot simpler)
-Notable features:
+GPT model 
+Karpathy's features:
 - rotary embeddings (and no positional embeddings)
+- no learnable params in rmsnorm 
 - QK norm
 - untied weights for token embedding and lm_head
 - relu^2 activation in MLP
 - norm after token embedding
-- no learnable params in rmsnorm (unless affine_ln=True)
 - no bias in linear layers
-- Group-Query Attention (GQA) support for more efficient inference
+- Value embedding with input-dependent gating (ResFormer-style)
 - Flash Attention 3 integration
+- Group-Query Attention (GQA) support for more efficient inference
+- Smear gate, backout residual
+My features:
+- Group-Query Attention (GQA) for training (kv-head-ratio=2, half the ve param)
+- disjoint ve and smear channels (config.n_ch)
+- lns: multiply each layer-norm output by 1/sqrt(layer_index+1)
+- relambdas: my new learnable residual scaling init
+- enable RMSNorm affine parameters (weight and bias) 
+- enable various norm positions (pre, post, peri/sandwich, reordered, ...) 
 """
 
 from dataclasses import dataclass
