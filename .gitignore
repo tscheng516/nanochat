@@ -11,9 +11,8 @@ eval_bundle/
 # Local setup
 CLAUDE.md
 wandb/
-train.sh
 logs/
 nanochat.egg-info/
 nohup.out
-train_batch.sh
-read_nanochat_lambdas.py
+*.sbatch
+*.sh
