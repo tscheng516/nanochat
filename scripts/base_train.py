@@ -154,6 +154,7 @@ def build_model_meta(depth):
         v_norm=("v" in args.tm_norm),
         affine_ln=args.affine_ln,
         lns=args.lns,
+        relambdas=args.relambdas,
     )
     with torch.device("meta"):
         model_meta = GPT(config)
