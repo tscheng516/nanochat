@@ -57,6 +57,8 @@ parser.add_argument("--affine-ln", action="store_true", help="use learnable affi
 parser.add_argument("--lns", action="store_true", help="enable Layer Norm Scaling (scale norm outputs by 1/sqrt(layer_index))")
 parser.add_argument("--max-seq-len", type=int, default=2048, help="max context length")
 parser.add_argument("--window-pattern", type=str, default="SSSL", help="sliding window pattern tiled across layers: L=full, S=half context (e.g. 'SSL')")
+# Initialization
+parser.add_argument("--relambdas",action="store_true", help="use my init scheme")
 # Training horizon (only one used, in order of precedence)
 parser.add_argument("--num-iterations", type=int, default=-1, help="explicit number of optimization steps (-1 = disable)")
 parser.add_argument("--target-flops", type=float, default=-1.0, help="calculate num_iterations to reach target_flops (-1 = disable)")

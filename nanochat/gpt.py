@@ -50,8 +50,7 @@ class GPTConfig:
     # False (default) = unlearnable, matches the original behavior.
     # True = traditional Transformer-style affine layer norm.
     affine_ln: bool = False
-    # Layer norm scaling: when True, multiply each layer-norm output by 1/sqrt(layer_index)
-    lns: bool = False
+    lns: bool = False # Layer norm scaling: when True, multiply each layer-norm output by 1/sqrt(layer_index)
     relambdas: bool = False # whether to use my new learnable residual scaling
 
 
@@ -103,7 +102,7 @@ class CausalSelfAttention(nn.Module):
         self.c_k = Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_v = Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_proj = Linear(self.n_embd, self.n_embd, bias=False)
-        self.ve_gate_channels = config.n_ch
+        self.ve_gate_channels = config.n_ch # changed to config instead of hard-coded 12
         self.ve_gate = Linear(self.ve_gate_channels, self.n_kv_head, bias=False) if has_ve(layer_idx, config.n_layer) else None
         # token-mixer normalization flags (queries/keys/values)
         self.w_norm = getattr(config, "w_norm", True)
