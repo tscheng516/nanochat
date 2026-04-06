@@ -33,6 +33,7 @@ class GPTConfig:
     n_head: int = 6 # number of query heads
     n_kv_head: int = 6 # number of key/value heads (GQA)
     n_embd: int = 768
+    n_ch: int = 12 # channels in value embedding and smear gate
     # Sliding window attention pattern string, tiled across layers. Final layer always L.
     # Characters: L=long (full context), S=short (quarter context)
     # Examples: "L"=all full context, "SL"=alternating, "SSL"=two short then one long
@@ -51,6 +52,7 @@ class GPTConfig:
     affine_ln: bool = False
     # Layer norm scaling: when True, multiply each layer-norm output by 1/sqrt(layer_index)
     lns: bool = False
+    relambdas: bool = False # whether to use my new learnable residual scaling
 
 
 class RMSNorm(nn.Module):
@@ -101,7 +103,7 @@ class CausalSelfAttention(nn.Module):
         self.c_k = Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_v = Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_proj = Linear(self.n_embd, self.n_embd, bias=False)
-        self.ve_gate_channels = 12
+        self.ve_gate_channels = config.n_ch
         self.ve_gate = Linear(self.ve_gate_channels, self.n_kv_head, bias=False) if has_ve(layer_idx, config.n_layer) else None
         # token-mixer normalization flags (queries/keys/values)
         self.w_norm = getattr(config, "w_norm", True)
@@ -315,7 +317,7 @@ class GPT(nn.Module):
         self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))   # fake init, real init in init_weights()
         self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))     # fake init, real init in init_weights()
         # Smear: mix previous token's embedding into current token (cheap bigram-like info)
-        self.smear_gate = Linear(24, 1, bias=False)
+        self.smear_gate = Linear(2 * config.n_ch, 1, bias=False)
         self.smear_lambda = nn.Parameter(torch.zeros(1))
         # Backout: subtract cached mid-layer residual before final norm to remove low-level features
         self.backout_lambda = nn.Parameter(0.2 * torch.ones(1))
@@ -372,10 +374,10 @@ class GPT(nn.Module):
         # Per-layer resid init: stronger residual at early layers, weaker at deep layers
         n_layer = self.config.n_layer
         for i in range(n_layer):
-            self.resid_lambdas.data[i] = 1.15 - (0.10 * i / max(n_layer - 1, 1))
+            self.resid_lambdas.data[i] = 1.15 - (0.10 * i / max(n_layer - 1, 1)) if not self.config.relambdas else 0.5 + 0.5 * i / max(n_layer - 1, 1)
         # Decaying x0 init: earlier layers get more input embedding blending
         for i in range(n_layer):
-            self.x0_lambdas.data[i] = 0.20 - (0.15 * i / max(n_layer - 1, 1))
+            self.x0_lambdas.data[i] = 0.20 - (0.15 * i / max(n_layer - 1, 1)) if not self.config.relambdas else 3.0 * (0.1 / 3.0) ** (i / max(n_layer - 1, 1))
 
         # Value embeddings (init like c_v: uniform with same std)
         for ve in self.value_embeds.values():
@@ -608,7 +610,7 @@ class GPT(nn.Module):
         if kv_cache is None:
             # Training / naive generate: full sequence available, use fast slice
             assert T > 1, "Training forward pass should have T > 1"
-            gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, 12:35])) # smear_gate uses 12:35 channels, where ve 0:11
+            gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, self.config.n_ch: 3*self.config.n_ch-1])) # smear_gate uses 12:35 channels, where ve 0:11
             x = torch.cat([x[:, :1], x[:, 1:] + gate * x[:, :-1]], dim=1)
         else:
             # KV cache inference: read prev embedding from cache, store current for next step
@@ -616,11 +618,11 @@ class GPT(nn.Module):
             kv_cache.prev_embedding = x[:, -1:, :]
             if T > 1:
                 # Prefill: apply smear to positions 1+, same as training
-                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, 12:35]))
+                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, self.config.n_ch: 3*self.config.n_ch-1]))
                 x = torch.cat([x[:, :1], x[:, 1:] + gate * x[:, :-1]], dim=1)
             elif x_pre_smear is not None:
                 # Decode: single token, use cached prev embedding
-                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, :, 12:35]))
+                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, self.config.n_ch: 3*self.config.n_ch-1]))
                 x = x + gate * x_pre_smear
 
         # Forward the trunk of the Transformer
