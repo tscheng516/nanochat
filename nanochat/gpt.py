@@ -12,6 +12,7 @@ Notable features:
 - Flash Attention 3 integration
 """
 
+import math
 from functools import partial
 from dataclasses import dataclass
 
@@ -37,6 +38,10 @@ class GPTConfig:
     # Characters: L=long (full context), S=short (quarter context)
     # Examples: "L"=all full context, "SL"=alternating, "SSL"=two short then one long
     window_pattern: str = "SSSL"
+    n_ch: int = 12
+    disjoint_ch: bool = False
+    lns: bool = False
+    relambdas: bool = False
 
 
 def norm(x):
@@ -76,7 +81,7 @@ class CausalSelfAttention(nn.Module):
         self.c_k = Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_v = Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_proj = Linear(self.n_embd, self.n_embd, bias=False)
-        self.ve_gate_channels = 12
+        self.ve_gate_channels = config.n_ch
         self.ve_gate = Linear(self.ve_gate_channels, self.n_kv_head, bias=False) if has_ve(layer_idx, config.n_layer) else None
 
     def forward(self, x, ve, cos_sin, window_size, kv_cache):
@@ -144,10 +149,19 @@ class Block(nn.Module):
         super().__init__()
         self.attn = CausalSelfAttention(config, layer_idx)
         self.mlp = MLP(config)
+        self.layer_idx = layer_idx
+        self.lns = config.lns
+        self.lns_factor = 1.0 / math.sqrt(layer_idx + 1) if config.lns else 1.0
 
     def forward(self, x, ve, cos_sin, window_size, kv_cache):
-        x = x + self.attn(norm(x), ve, cos_sin, window_size, kv_cache)
-        x = x + self.mlp(norm(x))
+        n1 = norm(x)
+        if self.lns:
+            n1 = n1 * self.lns_factor
+        x = x + self.attn(n1, ve, cos_sin, window_size, kv_cache)
+        n2 = norm(x)
+        if self.lns:
+            n2 = n2 * self.lns_factor
+        x = x + self.mlp(n2)
         return x
 
 
@@ -180,7 +194,7 @@ class GPT(nn.Module):
         self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))   # fake init, real init in init_weights()
         self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))     # fake init, real init in init_weights()
         # Smear: mix previous token's embedding into current token (cheap bigram-like info)
-        self.smear_gate = Linear(24, 1, bias=False)
+        self.smear_gate = Linear(2 * config.n_ch, 1, bias=False)
         self.smear_lambda = nn.Parameter(torch.zeros(1))
         # Backout: subtract cached mid-layer residual before final norm to remove low-level features
         self.backout_lambda = nn.Parameter(0.2 * torch.ones(1))
@@ -233,10 +247,18 @@ class GPT(nn.Module):
         # Per-layer resid init: stronger residual at early layers, weaker at deep layers
         n_layer = self.config.n_layer
         for i in range(n_layer):
-            self.resid_lambdas.data[i] = 1.15 - (0.10 * i / max(n_layer - 1, 1))
+            self.resid_lambdas.data[i] = (
+                0.5 + 0.5 * i / max(n_layer - 1, 1)
+                if self.config.relambdas
+                else 1.15 - (0.10 * i / max(n_layer - 1, 1))
+            )
         # Decaying x0 init: earlier layers get more input embedding blending
         for i in range(n_layer):
-            self.x0_lambdas.data[i] = 0.20 - (0.15 * i / max(n_layer - 1, 1))
+            self.x0_lambdas.data[i] = (
+                3.0 * (0.1 / 3.0) ** (i / max(n_layer - 1, 1))
+                if self.config.relambdas
+                else 0.20 - (0.15 * i / max(n_layer - 1, 1))
+            )
 
         # Value embeddings (init like c_v: uniform with same std)
         for ve in self.value_embeds.values():
@@ -425,10 +447,12 @@ class GPT(nn.Module):
         x = norm(x)
 
         # Smear: mix previous token's embedding into current position (cheap bigram info)
+        n_ch = self.config.n_ch
+        smear_slice = (slice(None), slice(None), slice(n_ch, 3 * n_ch)) if self.config.disjoint_ch else (slice(None), slice(None), slice(None, 2 * n_ch))
         if kv_cache is None:
             # Training / naive generate: full sequence available, use fast slice
             assert T > 1, "Training forward pass should have T > 1"
-            gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, :24]))
+            gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:][smear_slice]))
             x = torch.cat([x[:, :1], x[:, 1:] + gate * x[:, :-1]], dim=1)
         else:
             # KV cache inference: read prev embedding from cache, store current for next step
@@ -436,11 +460,11 @@ class GPT(nn.Module):
             kv_cache.prev_embedding = x[:, -1:, :]
             if T > 1:
                 # Prefill: apply smear to positions 1+, same as training
-                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:, :24]))
+                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, 1:][smear_slice]))
                 x = torch.cat([x[:, :1], x[:, 1:] + gate * x[:, :-1]], dim=1)
             elif x_pre_smear is not None:
                 # Decode: single token, use cached prev embedding
-                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[:, :, :24]))
+                gate = self.smear_lambda.to(x.dtype) * torch.sigmoid(self.smear_gate(x[smear_slice]))
                 x = x + gate * x_pre_smear
 
         # Forward the trunk of the Transformer
