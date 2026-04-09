@@ -7,16 +7,16 @@ Supports two formats:
 
 Usage:
     # Option A – HuggingFace safetensors (recommended, no GPU needed)
-    python read_nanochat_lambdas.py --hf nanochat-students/nanochat-d20
+    python read_lambdas.py --hf nanochat-students/nanochat-d20
 
     # Option B – native .pt checkpoint
-    python read_nanochat_lambdas.py --pt ~/.cache/nanochat/chatsft_checkpoints/d32/model_000650.pt
+    python read_lambdas.py --pt ~/.cache/nanochat/chatsft_checkpoints/d32/model_000650.pt
 
     # Option C – Karpathy's official d32 model via HF
-    python read_nanochat_lambdas.py --hf karpathy/nanochat-d32
+    python read_lambdas.py --hf karpathy/nanochat-d32
 
 Command:
-python read_nanochat_lambdas.py   --pt ~/.cache/nanochat/base_checkpoints/d16_lambdas/model_041600.pt    
+python read_lambdas.py   --pt ~/.cache/nanochat/base_checkpoints/d16_lambdas/model_041600.pt    
 """
 
 import argparse
