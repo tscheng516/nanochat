@@ -157,7 +157,7 @@ def analyse(state_dict, resid_keys, x0_keys, smear_keys, backout_keys):
     # ── summary statistics ───────────────────────────────────────────────
     if resid_vals:
         rv = np.array(resid_vals, dtype=float)
-        print(f"\nresid_lambdas  (init=1.0)")
+        print(f"\nresid_lambdas ")
         print(f"  mean={rv.mean():.4f}  std={rv.std():.4f}  "
               f"min={rv.min():.4f}  max={rv.max():.4f}")
         print(f"  layers with lambda < 1.0 : {(rv < 1.0).sum()}/{len(rv)}")
@@ -165,18 +165,18 @@ def analyse(state_dict, resid_keys, x0_keys, smear_keys, backout_keys):
 
     if x0_vals:
         xv = np.array(x0_vals, dtype=float)
-        print(f"\nx0_lambdas     (init=0.1)")
+        print(f"\nx0_lambdas ")
         print(f"  mean={xv.mean():.4f}  std={xv.std():.4f}  "
               f"min={xv.min():.4f}  max={xv.max():.4f}")
 
     if smear_vals:
         sv = np.array(smear_vals, dtype=float)
-        print(f"\nsmear_lambda   (init=0.0)")
+        print(f"\nsmear_lambda ")
         print(f"  value={'  '.join(f'{v:.6f}' for v in sv)}")
 
     if backout_vals:
         bv = np.array(backout_vals, dtype=float)
-        print(f"\nbackout_lambda (init=0.2)")
+        print(f"\nbackout_lambda ")
         print(f"  value={'  '.join(f'{v:.6f}' for v in bv)}")
 
     # ── theory check ─────────────────────────────────────────────────────
