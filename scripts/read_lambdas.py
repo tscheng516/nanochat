@@ -87,20 +87,33 @@ def _load_meta_json(pt_path: str):
         return json.load(f)
 
 
-def _compute_init_lambdas(n_layer: int, reinit: bool):
+def _compute_init_lambdas(n_layer: int, reinit: bool, relambdas: bool):
     """Reproduce the init values from GPT.init_weights for display purposes.
 
     Returns (resid_init, x0_init, smear_init, backout_init) where the per-layer
     lists have length *n_layer* and the scalar lists have length 1.
+
+    Either *reinit* or *relambdas* triggers lambda reinitialization for
+    resid/x0.  They differ only in smear/backout defaults:
+      - relambdas (old): smear_init=0.0, backout_init=0.2
+      - reinit   (new): smear_init=0.2, backout_init=0.0
     """
+    use_lambda_init = reinit or relambdas
     resid_init = []
     x0_init = []
     for i in range(n_layer):
         r = i / max(n_layer - 1, 1)
-        resid_init.append(0.5 + 0.5 * r if reinit else 1.15 - 0.10 * r)
-        x0_init.append(3.0 * (0.1 / 3.0) ** r if reinit else 0.20 - 0.15 * r)
-    smear_init = [0.2 if reinit else 0.0]
-    backout_init = [0.0 if reinit else 0.2]
+        resid_init.append(0.5 + 0.5 * r if use_lambda_init else 1.15 - 0.10 * r)
+        x0_init.append(3.0 * (0.1 / 3.0) ** r if use_lambda_init else 0.20 - 0.15 * r)
+    if reinit:
+        smear_init = [0.2]
+        backout_init = [0.0]
+    elif relambdas:
+        smear_init = [0.0]
+        backout_init = [0.2]
+    else:
+        smear_init = [0.0]
+        backout_init = [0.2]
     return resid_init, x0_init, smear_init, backout_init
 
 
@@ -302,11 +315,12 @@ def main():
         meta = _load_meta_json(args.pt)
         if meta is not None:
             model_config = meta.get("model_config", {})
-            reinit = model_config.get("reinit", False) or model_config.get("relambdas", False)
+            reinit = model_config.get("reinit", False)
+            relambdas = model_config.get("relambdas", False)
             n_layer = model_config.get("n_layer")
-            print(f"  Training config: reinit={reinit}, n_layer={n_layer}")
+            print(f"  Training config: reinit={reinit}, relambdas={relambdas}, n_layer={n_layer}")
             if n_layer is not None:
-                init_lambdas = _compute_init_lambdas(n_layer, reinit)
+                init_lambdas = _compute_init_lambdas(n_layer, reinit, relambdas)
 
     analyse(state_dict, resid_keys, x0_keys, smear_keys, backout_keys,
             init_lambdas=init_lambdas)
