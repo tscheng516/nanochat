@@ -180,25 +180,25 @@ def analyse(state_dict, resid_keys, x0_keys, smear_keys, backout_keys):
         print(f"  value={'  '.join(f'{v:.6f}' for v in bv)}")
 
     # ── theory check ─────────────────────────────────────────────────────
-    if resid_vals and x0_vals:
-        rv = np.array(resid_vals, dtype=float)
-        xv = np.array(x0_vals,   dtype=float)
-        # Fixed-point variance (sigma_F^2 ~ 1 at init, V0 ~ 1)
-        # V* = (mu^2 * V0) / (1 - lambda) + sigma_F^2 / (1 - lambda^2)
-        lam   = rv.mean()
-        mu    = xv.mean()
-        sigma_F2 = 1.0   # approximate
-        V0       = 1.0
-        if lam < 1.0:
-            Vstar = (mu**2 * V0) / (1 - lam) + sigma_F2 / (1 - lam**2)
-            grad_gain = mu / (1 - lam)
-            print(f"\n── Theory (mean-field, sigma_F=1, V0=1) ──────────────")
-            print(f"  lambda_mean = {lam:.4f},  mu_mean = {mu:.4f}")
-            print(f"  Fixed-point variance  V*  = {Vstar:.4f}")
-            print(f"  E2E gradient gain  mu/(1-lambda) = {grad_gain:.4f}")
-        else:
-            print(f"\n[NOTE] mean lambda >= 1 ({lam:.4f}); "
-                  "fixed-point analysis requires lambda < 1.")
+    # if resid_vals and x0_vals:
+    #     rv = np.array(resid_vals, dtype=float)
+    #     xv = np.array(x0_vals,   dtype=float)
+    #     # Fixed-point variance (sigma_F^2 ~ 1 at init, V0 ~ 1)
+    #     # V* = (mu^2 * V0) / (1 - lambda) + sigma_F^2 / (1 - lambda^2)
+    #     lam   = rv.mean()
+    #     mu    = xv.mean()
+    #     sigma_F2 = 1.0   # approximate
+    #     V0       = 1.0
+    #     if lam < 1.0:
+    #         Vstar = (mu**2 * V0) / (1 - lam) + sigma_F2 / (1 - lam**2)
+    #         grad_gain = mu / (1 - lam)
+    #         print(f"\n── Theory (mean-field, sigma_F=1, V0=1) ──────────────")
+    #         print(f"  lambda_mean = {lam:.4f},  mu_mean = {mu:.4f}")
+    #         print(f"  Fixed-point variance  V*  = {Vstar:.4f}")
+    #         print(f"  E2E gradient gain  mu/(1-lambda) = {grad_gain:.4f}")
+    #     else:
+    #         print(f"\n[NOTE] mean lambda >= 1 ({lam:.4f}); "
+    #               "fixed-point analysis requires lambda < 1.")
 
 
 # ─────────────────────────────────────────────
