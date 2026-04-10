@@ -41,7 +41,7 @@ class GPTConfig:
     n_ch: int = 12
     disjoint_ch: bool = False
     lns: bool = False
-    relambdas: bool = False
+    reinit: bool = False
 
 
 def norm(x):
@@ -195,9 +195,9 @@ class GPT(nn.Module):
         self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))     # fake init, real init in init_weights()
         # Smear: mix previous token's embedding into current token (cheap bigram-like info)
         self.smear_gate = Linear(2 * config.n_ch, 1, bias=False)
-        self.smear_lambda = nn.Parameter(torch.zeros(1))
+        self.smear_lambda = nn.Parameter(0.2 * torch.ones(1) if config.reinit else torch.zeros(1))
         # Backout: subtract cached mid-layer residual before final norm to remove low-level features
-        self.backout_lambda = nn.Parameter(0.2 * torch.ones(1))
+        self.backout_lambda = nn.Parameter(torch.zeros(1) if config.reinit else 0.2 * torch.ones(1))
         # Value embeddings (ResFormer-style): alternating layers, last layer always included
         head_dim = config.n_embd // config.n_head
         kv_dim = config.n_kv_head * head_dim
@@ -249,14 +249,14 @@ class GPT(nn.Module):
         for i in range(n_layer):
             self.resid_lambdas.data[i] = (
                 0.5 + 0.5 * i / max(n_layer - 1, 1)
-                if self.config.relambdas
+                if self.config.reinit
                 else 1.15 - (0.10 * i / max(n_layer - 1, 1))
             )
         # Decaying x0 init: earlier layers get more input embedding blending
         for i in range(n_layer):
             self.x0_lambdas.data[i] = (
                 3.0 * (0.1 / 3.0) ** (i / max(n_layer - 1, 1))
-                if self.config.relambdas
+                if self.config.reinit
                 else 0.20 - (0.15 * i / max(n_layer - 1, 1))
             )
 
@@ -388,15 +388,9 @@ class GPT(nn.Module):
             'total': total,
         }
 
-    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5, smear_lr=None, output_lr=None):
+    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02, weight_decay=0.0, scalar_lr=0.5):
         model_dim = self.config.n_embd
         ddp, rank, local_rank, world_size = get_dist_info()
-
-        # Default smear_lr and output_lr based on embedding_lr and scalar_lr
-        if smear_lr is None:
-            smear_lr = embedding_lr * 0.66
-        if output_lr is None:
-            output_lr = scalar_lr * 0.4
 
         # Separate out all parameters into groups
         matrix_params = list(self.transformer.h.parameters())
@@ -406,8 +400,8 @@ class GPT(nn.Module):
         resid_params = [self.resid_lambdas]
         x0_params = [self.x0_lambdas]
         smear_params = [self.smear_gate.weight, self.smear_lambda]
-        output_params = [self.backout_lambda]
-        assert len(list(self.parameters())) == len(matrix_params) + len(embedding_params) + len(lm_head_params) + len(value_embeds_params) + len(resid_params) + len(x0_params) + len(smear_params) + len(output_params)
+        backout_params = [self.backout_lambda]
+        assert len(list(self.parameters())) == len(matrix_params) + len(embedding_params) + len(lm_head_params) + len(value_embeds_params) + len(resid_params) + len(x0_params) + len(smear_params) + len(backout_params)
 
         # Scale the LR for the AdamW parameters by ∝1/√dmodel (tuned for 768 dim model)
         dmodel_lr_scale = (model_dim / 768) ** -0.5
@@ -421,8 +415,8 @@ class GPT(nn.Module):
             dict(kind='adamw', params=value_embeds_params, lr=embedding_lr * dmodel_lr_scale * 0.5, betas=(0.8, 0.995), eps=1e-10, weight_decay=0.01),
             dict(kind='adamw', params=resid_params, lr=scalar_lr * 0.01, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.05),
             dict(kind='adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),  # higher beta1 for x0
-            dict(kind='adamw', params=smear_params, lr=smear_lr, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=output_params, lr=output_lr, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0),
+            dict(kind='adamw', params=smear_params, lr=embedding_lr * 0.66, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0),
+            dict(kind='adamw', params=backout_params, lr=scalar_lr * 0.4, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0),
         ]
         # Muon groups (matrix params, grouped by shape for stacking)
         for shape in sorted({p.shape for p in matrix_params}):

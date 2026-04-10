@@ -54,7 +54,7 @@ parser.add_argument("--max-seq-len", type=int, default=2048, help="max context l
 parser.add_argument("--window-pattern", type=str, default="SSSL", help="sliding window pattern tiled across layers: L=full, S=half context (e.g. 'SSL')")
 parser.add_argument("--disjoint-ch", action="store_true", help="use disjoint channels for ve gate (0:n_ch) and smear gate (n_ch:3*n_ch)")
 parser.add_argument("--lns", action="store_true", help="layer norm scaling: multiply each norm output by 1/sqrt(layer_index+1)")
-parser.add_argument("--relambdas", action="store_true", help="use alternative residual lambda init scheme")
+parser.add_argument("--reinit", action="store_true", help="use alternative init scheme for lambdas (resid, x0, smear, backout)")
 # Training horizon (only one used, in order of precedence)
 parser.add_argument("--num-iterations", type=int, default=-1, help="explicit number of optimization steps (-1 = disable)")
 parser.add_argument("--target-flops", type=float, default=-1.0, help="calculate num_iterations to reach target_flops (-1 = disable)")
@@ -67,8 +67,6 @@ parser.add_argument("--unembedding-lr", type=float, default=0.008, help="learnin
 parser.add_argument("--weight-decay", type=float, default=0.28, help="cautious weight decay for the Muon optimizer (for weights)")
 parser.add_argument("--matrix-lr", type=float, default=0.02, help="learning rate for matrix parameters (Muon)")
 parser.add_argument("--scalar-lr", type=float, default=0.5, help="learning rate for scalars (resid_lambdas, x0_lambdas)")
-parser.add_argument("--smear-lr", type=float, default=None, help="learning rate for smear gate params (default: embedding_lr * 0.66)")
-parser.add_argument("--output-lr", type=float, default=None, help="learning rate for backout/output params (default: scalar_lr * 0.4)")
 parser.add_argument("--warmup-steps", type=int, default=40, help="number of steps for LR warmup")
 parser.add_argument("--warmdown-ratio", type=float, default=0.65, help="ratio of iterations for LR warmdown")
 parser.add_argument("--final-lr-frac", type=float, default=0.05, help="final LR as fraction of initial LR")
@@ -145,7 +143,7 @@ def build_model_meta(depth):
         n_ch=12,
         disjoint_ch=args.disjoint_ch,
         lns=args.lns,
-        relambdas=args.relambdas,
+        reinit=args.reinit,
     )
     with torch.device("meta"):
         model_meta = GPT(config)
@@ -319,8 +317,6 @@ optimizer = model.setup_optimizer(
     unembedding_lr=args.unembedding_lr * batch_lr_scale,
     embedding_lr=args.embedding_lr * batch_lr_scale,
     scalar_lr=args.scalar_lr * batch_lr_scale,
-    smear_lr=args.smear_lr * batch_lr_scale if args.smear_lr is not None else None,
-    output_lr=args.output_lr * batch_lr_scale if args.output_lr is not None else None,
     # Muon hyperparameters
     matrix_lr=args.matrix_lr * batch_lr_scale,
     weight_decay=weight_decay_scaled,
