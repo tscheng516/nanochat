@@ -1,5 +1,5 @@
 """
-Read resid_lambdas and x0_lambdas from nanochat pretrained checkpoints.
+Read resid_lambdas, x0_lambdas, smear_lambda, and backout_lambda from nanochat pretrained checkpoints.
 
 Supports two formats:
   1. Native nanochat .pt checkpoint (karpathy/nanochat-d32, sdobson/nanochat)
@@ -27,6 +27,33 @@ import numpy as np
 
 
 # ─────────────────────────────────────────────
+# Helper: classify lambda keys from a state dict
+# ─────────────────────────────────────────────
+
+def _classify_lambda_keys(state_dict):
+    """Return (resid_keys, x0_keys, smear_keys, backout_keys) from state_dict."""
+    resid_keys = sorted([k for k in state_dict if "resid_lambda" in k])
+    x0_keys    = sorted([k for k in state_dict if "x0_lambda"    in k])
+
+    if not resid_keys:
+        # Try flat tensor names used by nanochat's own save format
+        resid_keys = sorted([k for k in state_dict if "resid_lambdas" in k])
+        x0_keys    = sorted([k for k in state_dict if "x0_lambdas"    in k])
+
+    smear_keys   = sorted([k for k in state_dict if "smear_lambda" in k])
+    # Support both "backout_lambda" (nn.Parameter attr name) and "backout.lambda"
+    # (dot-separated key that appears in some checkpoint formats)
+    backout_keys = sorted([k for k in state_dict if "backout_lambda" in k or "backout.lambda" in k])
+
+    return resid_keys, x0_keys, smear_keys, backout_keys
+
+
+def _print_key_counts(resid_keys, x0_keys, smear_keys, backout_keys):
+    print(f"Found {len(resid_keys)} resid_lambda keys, {len(x0_keys)} x0_lambda keys, "
+          f"{len(smear_keys)} smear_lambda keys, {len(backout_keys)} backout_lambda keys")
+
+
+# ─────────────────────────────────────────────
 # 1. Load from native .pt checkpoint
 # ─────────────────────────────────────────────
 
@@ -39,16 +66,9 @@ def load_from_pt(path: str):
     if hasattr(state_dict, "state_dict"):          # nn.Module was saved
         state_dict = state_dict.state_dict()
 
-    resid_keys = sorted([k for k in state_dict if "resid_lambda" in k])
-    x0_keys    = sorted([k for k in state_dict if "x0_lambda"    in k])
-
-    if not resid_keys:
-        # Try flat tensor names used by nanochat's own save format
-        resid_keys = sorted([k for k in state_dict if "resid_lambdas" in k])
-        x0_keys    = sorted([k for k in state_dict if "x0_lambdas"    in k])
-
-    print(f"Found {len(resid_keys)} resid_lambda keys, {len(x0_keys)} x0_lambda keys")
-    return state_dict, resid_keys, x0_keys
+    resid_keys, x0_keys, smear_keys, backout_keys = _classify_lambda_keys(state_dict)
+    _print_key_counts(resid_keys, x0_keys, smear_keys, backout_keys)
+    return state_dict, resid_keys, x0_keys, smear_keys, backout_keys
 
 
 # ─────────────────────────────────────────────
@@ -80,10 +100,9 @@ def load_from_hf(repo_id: str):
                 if "lambda" in key.lower():
                     state_dict[key] = f.get_tensor(key)
 
-    resid_keys = sorted([k for k in state_dict if "resid_lambda" in k])
-    x0_keys    = sorted([k for k in state_dict if "x0_lambda"    in k])
-    print(f"Found {len(resid_keys)} resid_lambda keys, {len(x0_keys)} x0_lambda keys")
-    return state_dict, resid_keys, x0_keys
+    resid_keys, x0_keys, smear_keys, backout_keys = _classify_lambda_keys(state_dict)
+    _print_key_counts(resid_keys, x0_keys, smear_keys, backout_keys)
+    return state_dict, resid_keys, x0_keys, smear_keys, backout_keys
 
 
 # ─────────────────────────────────────────────
@@ -107,8 +126,8 @@ def _to_float_list(state_dict, keys):
     return vals
 
 
-def analyse(state_dict, resid_keys, x0_keys):
-    if not resid_keys and not x0_keys:
+def analyse(state_dict, resid_keys, x0_keys, smear_keys, backout_keys):
+    if not resid_keys and not x0_keys and not smear_keys and not backout_keys:
         print("\n[WARNING] No lambda keys found. Printing ALL keys for inspection:")
         for k in sorted(state_dict.keys()):
             print(f"  {k:60s}  shape={tuple(state_dict[k].shape)}")
@@ -116,11 +135,13 @@ def analyse(state_dict, resid_keys, x0_keys):
 
     # Print raw shapes so the user can see what was loaded
     print("\nRaw tensor shapes:")
-    for k in resid_keys + x0_keys:
+    for k in resid_keys + x0_keys + smear_keys + backout_keys:
         print(f"  {k:60s}  shape={tuple(state_dict[k].shape)}")
 
     resid_vals = _to_float_list(state_dict, resid_keys)
     x0_vals    = _to_float_list(state_dict, x0_keys)
+    smear_vals   = _to_float_list(state_dict, smear_keys)
+    backout_vals = _to_float_list(state_dict, backout_keys)
 
     # ── per-layer table ──────────────────────────────────────────────────
     print("\n" + "─"*60)
@@ -147,6 +168,16 @@ def analyse(state_dict, resid_keys, x0_keys):
         print(f"\nx0_lambdas     (init=0.1)")
         print(f"  mean={xv.mean():.4f}  std={xv.std():.4f}  "
               f"min={xv.min():.4f}  max={xv.max():.4f}")
+
+    if smear_vals:
+        sv = np.array(smear_vals, dtype=float)
+        print(f"\nsmear_lambda   (init=0.0)")
+        print(f"  value={'  '.join(f'{v:.6f}' for v in sv)}")
+
+    if backout_vals:
+        bv = np.array(backout_vals, dtype=float)
+        print(f"\nbackout_lambda (init=0.2)")
+        print(f"  value={'  '.join(f'{v:.6f}' for v in bv)}")
 
     # ── theory check ─────────────────────────────────────────────────────
     if resid_vals and x0_vals:
@@ -184,11 +215,11 @@ def main():
     args = parser.parse_args()
 
     if args.hf:
-        state_dict, resid_keys, x0_keys = load_from_hf(args.hf)
+        state_dict, resid_keys, x0_keys, smear_keys, backout_keys = load_from_hf(args.hf)
     else:
-        state_dict, resid_keys, x0_keys = load_from_pt(args.pt)
+        state_dict, resid_keys, x0_keys, smear_keys, backout_keys = load_from_pt(args.pt)
 
-    analyse(state_dict, resid_keys, x0_keys)
+    analyse(state_dict, resid_keys, x0_keys, smear_keys, backout_keys)
 
 
 if __name__ == "__main__":
