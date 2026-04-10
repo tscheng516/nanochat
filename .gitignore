@@ -11,3 +11,8 @@ eval_bundle/
 # Local setup
 CLAUDE.md
 wandb/
+logs/
+nanochat.egg-info/
+nohup.out
+*.sbatch
+*.sh
