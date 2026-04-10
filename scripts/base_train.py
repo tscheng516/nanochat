@@ -54,7 +54,7 @@ parser.add_argument("--max-seq-len", type=int, default=2048, help="max context l
 parser.add_argument("--window-pattern", type=str, default="SSSL", help="sliding window pattern tiled across layers: L=full, S=half context (e.g. 'SSL')")
 parser.add_argument("--disjoint-ch", action="store_true", help="use disjoint channels for ve gate (0:n_ch) and smear gate (n_ch:3*n_ch)")
 parser.add_argument("--lns", action="store_true", help="layer norm scaling: multiply each norm output by 1/sqrt(layer_index+1)")
-parser.add_argument("--relambdas", action="store_true", help="use alternative residual lambda init scheme")
+parser.add_argument("--reinit", action="store_true", help="use alternative init scheme for lambdas (resid, x0, smear, backout)")
 # Training horizon (only one used, in order of precedence)
 parser.add_argument("--num-iterations", type=int, default=-1, help="explicit number of optimization steps (-1 = disable)")
 parser.add_argument("--target-flops", type=float, default=-1.0, help="calculate num_iterations to reach target_flops (-1 = disable)")
@@ -145,7 +145,7 @@ def build_model_meta(depth):
         n_ch=12,
         disjoint_ch=args.disjoint_ch,
         lns=args.lns,
-        relambdas=args.relambdas,
+        reinit=args.reinit,
     )
     with torch.device("meta"):
         model_meta = GPT(config)
