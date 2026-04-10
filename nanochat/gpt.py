@@ -409,7 +409,7 @@ class GPT(nn.Module):
         print0(f"Scaling the LR for the AdamW parameters ∝1/√({model_dim}/768) = {dmodel_lr_scale:.6f}")
 
         # Build param_groups with all required fields explicit
-        if not self.config.reoptim:
+        if self.config.reoptim:
             param_groups = [
                 # AdamW groups (embeddings, lm_head, scalars)
                 dict(kind='adamw', params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale, betas=(0.8, 0.96), eps=1e-10, weight_decay=0.01),
