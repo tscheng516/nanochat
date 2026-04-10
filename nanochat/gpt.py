@@ -416,9 +416,9 @@ class GPT(nn.Module):
                 dict(kind='adamw', params=embedding_params, lr=embedding_lr * dmodel_lr_scale, betas=(0.8, 0.995), eps=1e-10, weight_decay=0.001),
                 dict(kind='adamw', params=value_embeds_params, lr=embedding_lr * dmodel_lr_scale * 0.5, betas=(0.8, 0.995), eps=1e-10, weight_decay=0.01),
                 dict(kind='adamw', params=resid_params, lr=scalar_lr * 0.01, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.05),
-                dict(kind='adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),  # higher beta1 for x0
+                dict(kind='adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.05),  # higher beta1 for x0, added wd
                 dict(kind='adamw', params=smear_params, lr=embedding_lr * dmodel_lr_scale, betas=(0.8, 0.995), eps=1e-10, weight_decay=0.001), # identical to embedding params
-                dict(kind='adamw', params=backout_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0), # identical to x0 params
+                dict(kind='adamw', params=backout_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.05), # identical to x0 params
             ]
         else: 
             param_groups = [
