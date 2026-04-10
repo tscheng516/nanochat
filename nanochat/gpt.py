@@ -42,6 +42,7 @@ class GPTConfig:
     disjoint_ch: bool = False
     lns: bool = False
     reinit: bool = False
+    reoptim: bool = False
 
 
 def norm(x):
@@ -415,8 +416,16 @@ class GPT(nn.Module):
             dict(kind='adamw', params=value_embeds_params, lr=embedding_lr * dmodel_lr_scale * 0.5, betas=(0.8, 0.995), eps=1e-10, weight_decay=0.01),
             dict(kind='adamw', params=resid_params, lr=scalar_lr * 0.01, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.05),
             dict(kind='adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),  # higher beta1 for x0
-            dict(kind='adamw', params=smear_params, lr=embedding_lr * 0.66, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=backout_params, lr=scalar_lr * 0.4, betas=(0.8, 0.95), eps=1e-10, weight_decay=0.0),
+            dict(kind='adamw', params=smear_params,
+                 lr=embedding_lr * dmodel_lr_scale if self.config.reoptim else embedding_lr * 0.66,
+                 betas=(0.8, 0.995) if self.config.reoptim else (0.8, 0.95),
+                 eps=1e-10,
+                 weight_decay=0.001 if self.config.reoptim else 0.0),
+            dict(kind='adamw', params=backout_params,
+                 lr=scalar_lr if self.config.reoptim else scalar_lr * 0.4,
+                 betas=(0.96, 0.95) if self.config.reoptim else (0.8, 0.95),
+                 eps=1e-10,
+                 weight_decay=0.0),
         ]
         # Muon groups (matrix params, grouped by shape for stacking)
         for shape in sorted({p.shape for p in matrix_params}):
