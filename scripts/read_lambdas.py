@@ -302,7 +302,7 @@ def main():
         meta = _load_meta_json(args.pt)
         if meta is not None:
             model_config = meta.get("model_config", {})
-            reinit = model_config.get("reinit", False)
+            reinit = model_config.get("reinit", False) or model_config.get("relambdas", False)
             n_layer = model_config.get("n_layer")
             print(f"  Training config: reinit={reinit}, n_layer={n_layer}")
             if n_layer is not None:
