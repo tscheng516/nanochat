@@ -104,10 +104,10 @@ def _compute_init_lambdas(n_layer: int, reinit: bool, relambdas: bool):
     for i in range(n_layer):
         r = i / max(n_layer - 1, 1)
         resid_init.append(0.5 + 0.5 * r if use_lambda_init else 1.15 - 0.10 * r)
-        x0_init.append(3.0 * (0.1 / 3.0) ** r if use_lambda_init else 0.20 - 0.15 * r)
+        x0_init.append(0.5 * n_layer * (0.2 / n_layer) ** r if use_lambda_init else 0.20 - 0.15 * r)
     if reinit:
         smear_init = [0.2]
-        backout_init = [0.0]
+        backout_init = [0.2]
     elif relambdas:
         smear_init = [0.0]
         backout_init = [0.2]

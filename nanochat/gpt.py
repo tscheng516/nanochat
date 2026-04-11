@@ -198,7 +198,7 @@ class GPT(nn.Module):
         self.smear_gate = Linear(2 * config.n_ch, 1, bias=False)
         self.smear_lambda = nn.Parameter(0.2 * torch.ones(1) if config.reinit else torch.zeros(1))
         # Backout: subtract cached mid-layer residual before final norm to remove low-level features
-        self.backout_lambda = nn.Parameter(torch.zeros(1) if config.reinit else 0.2 * torch.ones(1))
+        self.backout_lambda = nn.Parameter(0.2 * torch.ones(1) if config.reinit else 0.2 * torch.ones(1))
         # Value embeddings (ResFormer-style): alternating layers, last layer always included
         head_dim = config.n_embd // config.n_head
         kv_dim = config.n_kv_head * head_dim
@@ -256,7 +256,7 @@ class GPT(nn.Module):
         # Decaying x0 init: earlier layers get more input embedding blending
         for i in range(n_layer):
             self.x0_lambdas.data[i] = (
-                3.0 * (0.1 / 3.0) ** (i / max(n_layer - 1, 1))
+                0.5 * n_layer * (0.2 / n_layer) ** (i / max(n_layer - 1, 1))
                 if self.config.reinit
                 else 0.20 - (0.15 * i / max(n_layer - 1, 1))
             )
